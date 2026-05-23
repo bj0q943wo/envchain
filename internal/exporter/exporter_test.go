@@ -8,10 +8,10 @@ import (
 )
 
 var sampleEnv = map[string]string{
-	"APP_ENV":  "production",
-	"DB_URL":   "postgres://localhost/mydb",
-	"SECRET":   "p@ss w0rd!",
-	"PLAIN":    "simple",
+	"APP_ENV": "production",
+	"DB_URL":  "postgres://localhost/mydb",
+	"SECRET":  "p@ss w0rd!",
+	"PLAIN":   "simple",
 }
 
 func TestWrite_DotenvFormat(t *testing.T) {
@@ -57,6 +57,15 @@ func TestWrite_SortedOutput(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 3 || !strings.HasPrefix(lines[0], "A=") || !strings.HasPrefix(lines[2], "Z=") {
 		t.Errorf("expected sorted output, got: %v", lines)
+	}
+}
+
+func TestWrite_EmptyEnv(t *testing.T) {
+	for _, format := range []exporter.Format{exporter.FormatDotenv, exporter.FormatExport, exporter.FormatJSON} {
+		var buf strings.Builder
+		if err := exporter.Write(&buf, map[string]string{}, format); err != nil {
+			t.Errorf("format %q: unexpected error for empty env: %v", format, err)
+		}
 	}
 }
 
