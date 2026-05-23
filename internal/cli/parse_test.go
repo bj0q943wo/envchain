@@ -59,3 +59,16 @@ func TestParseArgs_UnknownFlag(t *testing.T) {
 		t.Errorf("error should mention flag name, got: %v", err)
 	}
 }
+
+func TestParseArgs_PositionalFiles(t *testing.T) {
+	cfg, err := parseArgs([]string{"a.env", "b.env", "c.env"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Files) != 3 {
+		t.Fatalf("expected 3 files, got %d: %v", len(cfg.Files), cfg.Files)
+	}
+	if cfg.Files[0] != "a.env" {
+		t.Errorf("expected first file to be a.env, got %s", cfg.Files[0])
+	}
+}
