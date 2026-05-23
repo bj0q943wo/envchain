@@ -1,4 +1,5 @@
-// Package cli wires together the resolver and exporter into a runnable command.
+// Package cli wires together argument parsing, loading, resolving, validating,
+// and exporting for the envchain command-line tool.
 package cli
 
 import (
@@ -6,96 +7,108 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
-	"github.com/user/envchain/internal/exporter"
-	"github.com/user/envchain/internal/resolver"
+	"github.com/yourorg/envchain/internal/exporter"
+	"github.com/yourorg/envchain/internal/resolver"
+	"github.com/yourorg/envchain/internal/validator"
 )
 
-// Config holds parsed CLI flags and arguments.
-type Config struct {
-	Files    []string
-	Optional []string
-	Format   string
-	Output   string
-	NoOS     bool
+// args holds parsed CLI configuration.
+type args struct {
+	files    []resolver.FileEntry
+	format   exporter.Format
+	output   string
+	noOS     bool
+	validate bool
 }
 
-// Run parses args and executes the envchain command.
-func Run(args []string) error {
-	cfg, err := parseArgs(args)
+// Run is the main entry point called by cmd/envchain/main.go.
+func Run(argv []string, stdout io.Writer) int {
+	a, err := parseArgs(argv)
 	if err != nil {
-		return err
+		fmt_err(err)
+		return 1
 	}
-	return execute(cfg, os.Stdout)
+	return execute(a, stdout)
 }
 
-func parseArgs(args []string) (*Config, error) {
-	fs := flag.NewFlagSet("envchain", flag.ContinueOnError)
-
-	var optional string
-	var format string
-	var output string
-	var noOS bool
-
-	fs.StringVar(&optional, "optional", "", "comma-separated list of optional env files")
-	fs.StringVar(&format, "format", "dotenv", "output format: dotenv, export, json")
-	fs.StringVar(&output, "output", "", "write output to file instead of stdout")
-	fs.BoolVar(&noOS, "no-os", false, "do not merge OS environment as base")
-
-	if err := fs.Parse(args); err != nil {
-		return nil, err
-	}
-
-	var optFiles []string
-	if optional != "" {
-		for _, f := range strings.Split(optional, ",") {
-			if t := strings.TrimSpace(f); t != "" {
-				optFiles = append(optFiles, t)
-			}
-		}
-	}
-
-	return &Config{
-		Files:    fs.Args(),
-		Optional: optFiles,
-		Format:   format,
-		Output:   output,
-		NoOS:     noOS,
-	}, nil
-}
-
-func execute(cfg *Config, stdout io.Writer) error {
-	fmt, err := exporter.ParseFormat(cfg.Format)
-	if err != nil {
-		return fmt_err(cfg.Format)
-	}
-
-	chain := resolver.NewChain(cfg.Files, cfg.Optional)
+func execute(a *args, stdout io.Writer) int {
+	chain := resolver.NewChain(a.files...)
 
 	var env map[string]string
-	if cfg.NoOS {
+	var err error
+	if a.noOS {
 		env, err = chain.Resolve()
 	} else {
 		env, err = chain.ResolveWithOS()
 	}
 	if err != nil {
-		return err
+		fmt_err(err)
+		return 1
+	}
+
+	if a.validate {
+		res := validator.Validate(env)
+		if !res.OK() {
+			fmt_err(fmt.Errorf("validation failed: %s", res.Error()))
+			return 1
+		}
 	}
 
 	out := stdout
-	if cfg.Output != "" {
-		f, ferr := os.Create(cfg.Output)
+	if a.output != "" {
+		f, ferr := os.Create(a.output)
 		if ferr != nil {
-			return fmt.Errorf("cannot open output file: %w", ferr)
+			fmt_err(ferr)
+			return 1
 		}
 		defer f.Close()
 		out = f
 	}
 
-	return exporter.Write(out, env, fmt)
+	if werr := exporter.Write(out, env, a.format); werr != nil {
+		fmt_err(werr)
+		return 1
+	}
+	return 0
 }
 
-func fmt_err(s string) error {
-	return fmt.Errorf("unknown format %q; valid formats: %s", s, strings.Join(exporter.ValidFormats, ", "))
+func parseArgs(argv []string) (*args, error) {
+	fs := flag.NewFlagSet("envchain", flag.ContinueOnError)
+
+	formatStr := fs.String("format", "dotenv", "output format: dotenv, export, json")
+	output := fs.String("o", "", "write output to file instead of stdout")
+	noOS := fs.Bool("no-os", false, "do not merge OS environment variables")
+	validateFlag := fs.Bool("validate", false, "validate key names and values before output")
+
+	if err := fs.Parse(argv); err != nil {
+		return nil, err
+	}
+
+	fmt, err := exporter.ParseFormat(*formatStr)
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []resolver.FileEntry
+	for _, f := range fs.Args() {
+		optional := len(f) > 0 && f[0] == '?'
+		path := f
+		if optional {
+			path = f[1:]
+		}
+		entries = append(entries, resolver.FileEntry{Path: path, Optional: optional})
+	}
+
+	return &args{
+		files:    entries,
+		format:   fmt,
+		output:   *output,
+		noOS:     *noOS,
+		validate: *validateFlag,
+	}, nil
+}
+
+func fmt_err(err error) {
+	fmt.Fprintf(os.Stderr, "envchain: %s\n", err)
 }
